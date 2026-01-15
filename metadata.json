@@ -1,0 +1,5 @@
+{
+  "name": "Copy of JSON Morph - Professional Data Transformer",
+  "description": "A high-performance utility for developers to sanitize, mock, and transform JSON data structures with ease. Support for recursive nullification and smart type-based value substitution.",
+  "requestFramePermissions": []
+}
