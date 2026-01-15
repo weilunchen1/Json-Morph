@@ -37,12 +37,15 @@
   "imports": {
     "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3"
   }
 }
 </script>
 </head>
 <body>
   <div id="root"></div>
+  <!-- 確保載入 index.tsx 作為 ES 模組 -->
+  <script type="module" src="index.tsx"></script>
 </body>
 </html>
