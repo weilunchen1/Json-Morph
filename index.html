@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>JSON Morph - 專業資料轉換工具</title>
   
-  <!-- 樣式與字體 -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,25 +20,11 @@
     .font-mono {
       font-family: 'Fira Code', monospace;
     }
-    ::-webkit-scrollbar {
-      width: 8px;
-    }
-    ::-webkit-scrollbar-track {
-      background: #1e293b;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: #334155;
-      border-radius: 4px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: #475569;
-    }
   </style>
 
-  <!-- 1. 引入 Babel 用於即時編譯 TSX -->
+  <!-- Babel 100% 瀏覽器端編譯器 -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- 2. 設定 Import Map 讓瀏覽器知道去哪裡抓 React -->
   <script type="importmap">
 {
   "imports": {
@@ -54,8 +39,7 @@
 </head>
 <body>
   <div id="root"></div>
-
-  <!-- 3. 使用 type="text/babel" 並加上 data-type="module" 處理 TSX -->
+  <!-- 由於 GitHub Pages 限制，將所有邏輯併入 index.tsx 並以 Babel 解析 -->
   <script type="text/babel" data-type="module" data-presets="react,typescript" src="index.tsx"></script>
 </body>
 </html>
