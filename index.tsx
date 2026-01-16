@@ -10,7 +10,7 @@ interface JSONState {
   fileName: string | null;
 }
 
-type TransformType = 'nullify' | 'smart' | 'compact';
+type TransformType = 'nullify' | 'smart' | 'compact' | 'format';
 
 // --- Services (Transformer Logic) ---
 const isDateString = (val: string): boolean => {
@@ -107,14 +107,24 @@ const App: React.FC = () => {
 
   const triggerTransform = (type: TransformType) => {
     try {
-      const parsed = JSON.parse(state.input);
+      // 第一次嘗試解析
+      let data = JSON.parse(state.input);
       let transformedContent: string;
 
       if (type === 'compact') {
-        // 直接轉為單行字串
-        transformedContent = JSON.stringify(parsed);
+        transformedContent = JSON.stringify(data);
+      } else if (type === 'format') {
+        // 如果解析出來是字串，代表可能是被二次轉義的 JSON，嘗試再解析一次
+        if (typeof data === 'string') {
+          try {
+            data = JSON.parse(data);
+          } catch (e) {
+            // 解析失敗則維持原狀
+          }
+        }
+        transformedContent = JSON.stringify(data, null, 2);
       } else {
-        const transformedData = type === 'nullify' ? nullifyTransform(parsed) : smartTransform(parsed);
+        const transformedData = type === 'nullify' ? nullifyTransform(data) : smartTransform(data);
         transformedContent = JSON.stringify(transformedData, null, 2);
       }
 
@@ -124,7 +134,7 @@ const App: React.FC = () => {
         error: null
       }));
     } catch (err) {
-      setState(prev => ({ ...prev, error: "Invalid JSON format." }));
+      setState(prev => ({ ...prev, error: "Invalid JSON format. 無法解析輸入內容。" }));
     }
   };
 
@@ -162,6 +172,20 @@ const App: React.FC = () => {
 
       <div className="flex flex-wrap gap-4 mb-6">
         <button 
+          onClick={() => triggerTransform('format')} 
+          disabled={!state.input} 
+          className="flex-1 min-w-[150px] bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-blue-500/20"
+        >
+          格式化為 JSON (Format)
+        </button>
+        <button 
+          onClick={() => triggerTransform('compact')} 
+          disabled={!state.input} 
+          className="flex-1 min-w-[150px] bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-emerald-500/20"
+        >
+          壓縮為單行 (Compact)
+        </button>
+        <button 
           onClick={() => triggerTransform('nullify')} 
           disabled={!state.input} 
           className="flex-1 min-w-[150px] bg-slate-800 hover:bg-slate-700 text-white font-semibold py-3 px-4 rounded-xl border border-slate-700 transition-all disabled:opacity-50"
@@ -176,13 +200,6 @@ const App: React.FC = () => {
           依格式轉換 (Smart)
         </button>
         <button 
-          onClick={() => triggerTransform('compact')} 
-          disabled={!state.input} 
-          className="flex-1 min-w-[150px] bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-emerald-500/20"
-        >
-          壓縮為單行 (Compact)
-        </button>
-        <button 
           onClick={clearAll} 
           className="bg-slate-800 hover:bg-red-900/30 hover:text-red-400 text-slate-400 font-semibold py-3 px-6 rounded-xl border border-slate-700 transition-all"
         >
@@ -192,14 +209,14 @@ const App: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-grow h-[600px]">
         <div className="flex flex-col">
-          <EditorHeader title="輸入 JSON" actionLabel="上傳檔案" onAction={() => fileInputRef.current?.click()} secondaryLabel="範例資料" secondaryAction={() => setState(p => ({...p, input: '{\n  "id": 123,\n  "user": {\n    "name": "Alex",\n    "roles": ["admin", "editor"]\n  },\n  "active": true\n}'}))} />
+          <EditorHeader title="輸入內容" actionLabel="上傳檔案" onAction={() => fileInputRef.current?.click()} secondaryLabel="貼上範例" secondaryAction={() => setState(p => ({...p, input: '"{\\"id\\": 1, \\"status\\": \\"ok\\"}"'}))} />
           <textarea 
             className="flex-grow bg-slate-900 text-indigo-300 p-4 font-mono text-sm resize-none focus:outline-none border-x border-b border-slate-700 rounded-b-lg" 
-            placeholder="在此貼上 JSON..."
+            placeholder="貼上 JSON 或被轉義的 JSON 字串..."
             value={state.input} 
             onChange={e => setState(p => ({...p, input: e.target.value}))} 
           />
-          <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileUpload} />
+          <input type="file" ref={fileInputRef} className="hidden" accept=".json,.txt" onChange={handleFileUpload} />
         </div>
 
         <div className="flex flex-col">
@@ -218,7 +235,7 @@ const App: React.FC = () => {
           />
           <div className="relative flex-grow">
             {state.error ? (
-              <div className="w-full h-full bg-red-900/10 border-x border-b border-red-500/50 p-4 text-red-400 font-medium rounded-b-lg flex items-center justify-center">
+              <div className="w-full h-full bg-red-900/10 border-x border-b border-red-500/50 p-4 text-red-400 font-medium rounded-b-lg flex items-center justify-center text-center">
                 {state.error}
               </div>
             ) : (
