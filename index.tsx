@@ -10,6 +10,8 @@ interface JSONState {
   fileName: string | null;
 }
 
+type TransformType = 'nullify' | 'smart' | 'compact';
+
 // --- Services (Transformer Logic) ---
 const isDateString = (val: string): boolean => {
   if (typeof val !== 'string' || val.length < 5) return false;
@@ -103,13 +105,22 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const triggerTransform = (type: 'nullify' | 'smart') => {
+  const triggerTransform = (type: TransformType) => {
     try {
       const parsed = JSON.parse(state.input);
-      const transformed = type === 'nullify' ? nullifyTransform(parsed) : smartTransform(parsed);
+      let transformedContent: string;
+
+      if (type === 'compact') {
+        // 直接轉為單行字串
+        transformedContent = JSON.stringify(parsed);
+      } else {
+        const transformedData = type === 'nullify' ? nullifyTransform(parsed) : smartTransform(parsed);
+        transformedContent = JSON.stringify(transformedData, null, 2);
+      }
+
       setState(prev => ({
         ...prev,
-        output: JSON.stringify(transformed, null, 2),
+        output: transformedContent,
         error: null
       }));
     } catch (err) {
@@ -146,36 +157,79 @@ const App: React.FC = () => {
           </span>
           JSON Morph
         </h1>
-        <p className="text-slate-400">專業級 JSON 資料結構轉換與清理工具</p>
+        <p className="text-slate-400">專業級 JSON 資料結構轉換、清理與壓縮工具</p>
       </header>
 
       <div className="flex flex-wrap gap-4 mb-6">
-        <button onClick={() => triggerTransform('nullify')} disabled={!state.input} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-semibold py-3 px-6 rounded-xl border border-slate-700 transition-all disabled:opacity-50">
+        <button 
+          onClick={() => triggerTransform('nullify')} 
+          disabled={!state.input} 
+          className="flex-1 min-w-[150px] bg-slate-800 hover:bg-slate-700 text-white font-semibold py-3 px-4 rounded-xl border border-slate-700 transition-all disabled:opacity-50"
+        >
           全部轉為 Null
         </button>
-        <button onClick={() => triggerTransform('smart')} disabled={!state.input} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-6 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-indigo-500/20">
+        <button 
+          onClick={() => triggerTransform('smart')} 
+          disabled={!state.input} 
+          className="flex-1 min-w-[150px] bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-indigo-500/20"
+        >
           依格式轉換 (Smart)
         </button>
-        <button onClick={clearAll} className="bg-slate-800 hover:bg-red-900/30 hover:text-red-400 text-slate-400 font-semibold py-3 px-6 rounded-xl border border-slate-700 transition-all">
+        <button 
+          onClick={() => triggerTransform('compact')} 
+          disabled={!state.input} 
+          className="flex-1 min-w-[150px] bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-emerald-500/20"
+        >
+          壓縮為單行 (Compact)
+        </button>
+        <button 
+          onClick={clearAll} 
+          className="bg-slate-800 hover:bg-red-900/30 hover:text-red-400 text-slate-400 font-semibold py-3 px-6 rounded-xl border border-slate-700 transition-all"
+        >
           清空
         </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-grow h-[600px]">
         <div className="flex flex-col">
-          <EditorHeader title="輸入 JSON" actionLabel="上傳檔案" onAction={() => fileInputRef.current?.click()} secondaryLabel="範例資料" secondaryAction={() => setState(p => ({...p, input: '{\n  "id": 1,\n  "user": "Test",\n  "date": "2023-01-01"\n}'}))} />
-          <textarea className="flex-grow bg-slate-900 text-indigo-300 p-4 font-mono text-sm resize-none focus:outline-none border-x border-b border-slate-700 rounded-b-lg" value={state.input} onChange={e => setState(p => ({...p, input: e.target.value}))} />
-          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+          <EditorHeader title="輸入 JSON" actionLabel="上傳檔案" onAction={() => fileInputRef.current?.click()} secondaryLabel="範例資料" secondaryAction={() => setState(p => ({...p, input: '{\n  "id": 123,\n  "user": {\n    "name": "Alex",\n    "roles": ["admin", "editor"]\n  },\n  "active": true\n}'}))} />
+          <textarea 
+            className="flex-grow bg-slate-900 text-indigo-300 p-4 font-mono text-sm resize-none focus:outline-none border-x border-b border-slate-700 rounded-b-lg" 
+            placeholder="在此貼上 JSON..."
+            value={state.input} 
+            onChange={e => setState(p => ({...p, input: e.target.value}))} 
+          />
+          <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileUpload} />
         </div>
 
         <div className="flex flex-col">
-          <EditorHeader title="轉換結果" actionLabel="下載檔案" onAction={() => {
-            const blob = new Blob([state.output], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = 'result.json'; a.click();
-          }} disabled={!state.output} secondaryLabel="複製" secondaryAction={() => navigator.clipboard.writeText(state.output)} />
-          <textarea className="flex-grow bg-slate-900/50 text-emerald-400 p-4 font-mono text-sm resize-none focus:outline-none border-x border-b border-slate-700 rounded-b-lg" readOnly value={state.output} />
+          <EditorHeader 
+            title="轉換結果" 
+            actionLabel="下載檔案" 
+            onAction={() => {
+              const blob = new Blob([state.output], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = state.fileName ? `morph_${state.fileName}` : 'result.json'; a.click();
+            }} 
+            disabled={!state.output} 
+            secondaryLabel="複製" 
+            secondaryAction={() => navigator.clipboard.writeText(state.output)} 
+          />
+          <div className="relative flex-grow">
+            {state.error ? (
+              <div className="w-full h-full bg-red-900/10 border-x border-b border-red-500/50 p-4 text-red-400 font-medium rounded-b-lg flex items-center justify-center">
+                {state.error}
+              </div>
+            ) : (
+              <textarea 
+                className="w-full h-full bg-slate-900/50 text-emerald-400 p-4 font-mono text-sm resize-none focus:outline-none border-x border-b border-slate-700 rounded-b-lg" 
+                readOnly 
+                placeholder="結果將顯示在此..."
+                value={state.output} 
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
