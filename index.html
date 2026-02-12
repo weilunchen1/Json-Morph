@@ -97,23 +97,11 @@
   <!-- Babel 100% 瀏覽器端編譯器 -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@19.0.0",
-    "react-dom": "https://esm.sh/react-dom@19.0.0",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/"
-  }
-}
-</script>
 </head>
 
 <body>
   <div id="root"></div>
-  <!-- 由於 GitHub Pages 限制，將所有邏輯併入 index.tsx 並以 Babel 解析 -->
-  <script type="text/babel" data-type="module" data-presets="react,typescript" src="index.tsx"></script>
+  <script type="module" src="/index.tsx"></script>
 </body>
 
 </html>
