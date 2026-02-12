@@ -1,13 +1,13 @@
 
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navigation from './components/Navigation.tsx';
 import JsonTool from './pages/JsonTool.tsx';
 import LogAnalyzer from './pages/LogAnalyzer.tsx';
 
 const App: React.FC = () => {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <div className="min-h-screen flex flex-col p-6 md:p-8 lg:p-10 max-w-[1800px] mx-auto animate-fade-in">
         {/* 導航標題 */}
         <Navigation />
@@ -19,7 +19,7 @@ const App: React.FC = () => {
           <Route path="/logAnalyzer" element={<LogAnalyzer />} />
         </Routes>
       </div>
-    </BrowserRouter>
+    </HashRouter>
   );
 };
 
