@@ -3,7 +3,11 @@ import { nullifyTransform, smartTransform, cleanJsonString } from '../services/t
 import EditorHeader from '../components/EditorHeader.tsx';
 import { JSONState } from '../types.ts';
 
-const JsonTool: React.FC = () => {
+interface JsonToolProps {
+    theme: 'dark' | 'light';
+}
+
+const JsonTool: React.FC<JsonToolProps> = ({ theme }) => {
     const [state, setState] = useState<JSONState>({
         input: '',
         output: '',
@@ -12,6 +16,18 @@ const JsonTool: React.FC = () => {
     });
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const isDark = theme === 'dark';
+    const themeClasses = {
+        panel: isDark ? 'bg-slate-900/50 border-slate-700/50 pro-shadow' : 'bg-white border-gray-200 shadow-lg',
+        textareaInput: isDark ? 'bg-slate-900 text-cyan-300' : 'bg-white text-gray-900',
+        textareaOutput: isDark ? 'bg-slate-900 text-emerald-300' : 'bg-white text-emerald-700',
+        buttonNeutral: isDark ? 'from-slate-800 to-slate-900 border-slate-700 text-white' : 'from-gray-200 to-gray-300 border-gray-300 text-gray-900',
+        buttonPrimary: isDark ? 'from-indigo-600 to-purple-600 text-white' : 'from-indigo-200 to-purple-200 text-gray-900',
+        buttonCyan: isDark ? 'from-cyan-600 to-cyan-700 text-white' : 'from-cyan-200 to-cyan-300 text-gray-900',
+        buttonBlue: isDark ? 'from-blue-600 to-blue-700 text-white' : 'from-blue-200 to-blue-300 text-gray-900',
+        buttonGreen: isDark ? 'from-emerald-600 to-emerald-700 text-white' : 'from-emerald-200 to-emerald-300 text-gray-900',
+        clearButton: isDark ? 'bg-slate-800/50 hover:bg-red-900/30 text-slate-300 hover:text-red-400 border-slate-700 hover:border-red-500/50' : 'bg-gray-100 hover:bg-red-50 text-gray-800 hover:text-red-700 border-gray-300 hover:border-red-300'
+    };
 
     const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setState(prev => ({ ...prev, input: e.target.value, error: null }));
@@ -102,7 +118,7 @@ const JsonTool: React.FC = () => {
                 <button
                     onClick={() => triggerTransform('nullify')}
                     disabled={!state.input}
-                    className="group relative overflow-hidden bg-gradient-to-br from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 text-white font-semibold py-2 px-3 rounded-lg border border-slate-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow hover:pro-shadow-lg text-xs"
+                    className={`group relative overflow-hidden bg-gradient-to-br ${themeClasses.buttonNeutral} ${isDark ? 'hover:from-slate-700 hover:to-slate-800' : 'hover:from-gray-300 hover:to-gray-400'} font-semibold py-2 px-3 rounded-lg border transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow hover:pro-shadow-lg text-xs`}
                 >
                     <div className="relative z-10 flex items-center justify-center gap-1.5">
                         <svg className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-300 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -116,7 +132,7 @@ const JsonTool: React.FC = () => {
                 <button
                     onClick={() => triggerTransform('smart')}
                     disabled={!state.input}
-                    className="group relative overflow-hidden bg-gradient-to-br from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs"
+                    className={`group relative overflow-hidden bg-gradient-to-br ${themeClasses.buttonPrimary} ${isDark ? 'hover:from-indigo-500 hover:to-purple-500' : 'hover:from-indigo-300 hover:to-purple-300'} font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs`}
                 >
                     <div className="relative z-10 flex items-center justify-center gap-1.5">
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -130,7 +146,7 @@ const JsonTool: React.FC = () => {
                 <button
                     onClick={() => triggerTransform('clean_format')}
                     disabled={!state.input}
-                    className="group relative overflow-hidden bg-gradient-to-br from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-white font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs"
+                    className={`group relative overflow-hidden bg-gradient-to-br ${themeClasses.buttonCyan} ${isDark ? 'hover:from-cyan-500 hover:to-cyan-600' : 'hover:from-cyan-300 hover:to-cyan-400'} font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs`}
                 >
                     <div className="relative z-10 flex items-center justify-center gap-1.5">
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -144,7 +160,7 @@ const JsonTool: React.FC = () => {
                 <button
                     onClick={() => triggerTransform('format')}
                     disabled={!state.input}
-                    className="group relative overflow-hidden bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs"
+                    className={`group relative overflow-hidden bg-gradient-to-br ${themeClasses.buttonBlue} ${isDark ? 'hover:from-blue-500 hover:to-blue-600' : 'hover:from-blue-300 hover:to-blue-400'} font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs`}
                 >
                     <div className="relative z-10 flex items-center justify-center gap-1.5">
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -158,7 +174,7 @@ const JsonTool: React.FC = () => {
                 <button
                     onClick={() => triggerTransform('compact')}
                     disabled={!state.input}
-                    className="group relative overflow-hidden bg-gradient-to-br from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs"
+                    className={`group relative overflow-hidden bg-gradient-to-br ${themeClasses.buttonGreen} ${isDark ? 'hover:from-emerald-500 hover:to-emerald-600' : 'hover:from-emerald-300 hover:to-emerald-400'} font-semibold py-2 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed pro-shadow-lg hover:scale-[1.02] text-xs`}
                 >
                     <div className="relative z-10 flex items-center justify-center gap-1.5">
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,7 +190,7 @@ const JsonTool: React.FC = () => {
             <div className="mb-3">
                 <button
                     onClick={clearAll}
-                    className="group relative overflow-hidden bg-slate-800/50 hover:bg-red-900/30 text-slate-300 hover:text-red-400 font-semibold py-1.5 px-3 rounded-lg border border-slate-700 hover:border-red-500/50 transition-all duration-300 pro-shadow w-full md:w-auto text-xs"
+                    className={`group relative overflow-hidden ${themeClasses.clearButton} font-semibold py-1.5 px-3 rounded-lg border transition-all duration-300 pro-shadow w-full md:w-auto text-xs`}
                 >
                     <div className="flex items-center justify-center gap-1.5">
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -188,17 +204,18 @@ const JsonTool: React.FC = () => {
             {/* 編輯器區域 - 專業雙欄布局 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-grow overflow-hidden">
                 {/* 輸入編輯器 */}
-                <div className="flex flex-col h-[600px] lg:h-full bg-slate-900/50 rounded-2xl border border-slate-700/50 pro-shadow overflow-hidden">
+                <div className={`flex flex-col h-[600px] lg:h-full ${themeClasses.panel} rounded-2xl border overflow-hidden`}>
                     <EditorHeader
                         title="輸入 JSON"
                         actionLabel="上傳檔案"
                         onAction={() => fileInputRef.current?.click()}
+                        theme={theme}
                         secondaryLabel="載入範例"
                         secondaryAction={() => setState(prev => ({ ...prev, input: '{\n  "id": 12345,\n  "name": "Jane Doe",\n  "email": "jane@example.com",\n  "active": true,\n  "createdAt": "2023-10-27T10:00:00Z",\n  "metadata": {\n    "source": "web",\n    "tags": ["dev", "beta"],\n    "preferences": {\n      "theme": "dark",\n      "notifications": true\n    }\n  }\n}' }))}
                     />
                     <div className="relative flex-grow overflow-hidden">
                         <textarea
-                            className="w-full h-full bg-slate-900 text-cyan-300 p-6 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/50 leading-relaxed"
+                            className={`w-full h-full ${themeClasses.textareaInput} p-6 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/50 leading-relaxed`}
                             placeholder="📝 在此貼上或輸入您的 JSON 資料..."
                             value={state.input}
                             onChange={handleInputChange}
@@ -217,12 +234,13 @@ const JsonTool: React.FC = () => {
                 </div>
 
                 {/* 輸出編輯器 */}
-                <div className="flex flex-col h-[600px] lg:h-full bg-slate-900/50 rounded-2xl border border-slate-700/50 pro-shadow overflow-hidden">
+                <div className={`flex flex-col h-[600px] lg:h-full ${themeClasses.panel} rounded-2xl border overflow-hidden`}>
                     <EditorHeader
                         title="轉換結果"
                         actionLabel="下載"
                         onAction={downloadOutput}
                         disabled={!state.output}
+                        theme={theme}
                         secondaryLabel="複製"
                         secondaryAction={() => copyToClipboard(state.output)}
                     />
@@ -239,7 +257,7 @@ const JsonTool: React.FC = () => {
                             </div>
                         ) : (
                             <textarea
-                                className="w-full h-full bg-slate-900 text-emerald-300 p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed"
+                                className={`w-full h-full ${themeClasses.textareaOutput} p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed`}
                                 readOnly
                                 placeholder="✨ 轉換結果將顯示在此處..."
                                 value={state.output}

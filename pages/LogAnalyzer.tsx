@@ -9,10 +9,14 @@ interface LogEntry {
     tags?: string[];
 }
 
-const LogAnalyzer: React.FC = () => {
+interface LogAnalyzerProps {
+    theme: 'dark' | 'light';
+}
+
+const LogAnalyzer: React.FC<LogAnalyzerProps> = ({ theme }) => {
     const [logInput, setLogInput] = useState('');
     const [parsedLogs, setParsedLogs] = useState<LogEntry[]>([]);
-    const [filter, setFilter] = useState<'all' | 'error' | 'warn' | 'info'>('all');
+    const [filter, setFilter] = useState<'all' | 'error' | 'success'>('all');
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedTag, setSelectedTag] = useState('all');
     const [currentPage, setCurrentPage] = useState(1);
@@ -55,108 +59,145 @@ const LogAnalyzer: React.FC = () => {
 
     const groupTransactions = () => {
         const groups: Transaction[] = [];
-        const pendingMap = new Map<string, LogEntry>(); // Key -> Request Log
+        const requestLookup = new Map<string, LogEntry>(); // KeyString -> RequestLog
+        const requestsByTime: Array<{ log: LogEntry, keys: string[], time: number }> = []; // 時間序列的 Request 列表
 
-        // 用來提取識別碼的正則表達式，針對常見欄位
-        // 支援多種常見的 Key，例如 ShopId, OrderCode, TSCode, TMCode, ShippingOrderCode
-        // 注意：有些 log 可能包含多個 Key，這裡優先取前面的或者特定的
-        const keyPatterns = [
-            /"(TSCode|TMCode|ShippingOrderCode|OrderCode|Shopid|ShopId)"\s*[:=]\s*"?([^",}]+)"?/g
-        ];
-
-        // 提取一組識別 Key (例如 "ShopId:12345|OrderCode:ABC")
+        // 增強的識別碼提取函數
         const extractKeys = (content: string): string[] => {
             const keys: string[] = [];
-            keyPatterns.forEach(pattern => {
-                let match;
-                while ((match = pattern.exec(content)) !== null) {
-                    // match[1] 是 Key 名稱 (如 OrderCode)
-                    // match[2] 是 Value (如 ABC)
-                    // 忽略 null 或空值
-                    if (match[2] && match[2] !== 'null') {
-                        keys.push(`${match[1]}:${match[2]}`);
-                    }
+
+            // 規則 1: 結構化 JSON 欄位提取
+            const structuredPattern = /"(TSCode|TMCode|ShippingOrderCode|OrderCode|Shopid|ShopId)"\s*[:=]\s*"?([^",}]+)"?/g;
+            let match;
+            while ((match = structuredPattern.exec(content)) !== null) {
+                if (match[2] && match[2] !== 'null') {
+                    keys.push(`${match[1]}:${match[2]}`);
                 }
+            }
+
+            // 規則 2: 從純文字中提取數字型識別碼（例如 ErrorMessage 內容）
+            // 尋找 8-15 位數字（常見的訂單編號長度）
+            const numberPattern = /\b(\d{8,15})\b/g;
+            const foundNumbers = new Set<string>();
+            while ((match = numberPattern.exec(content)) !== null) {
+                foundNumbers.add(match[1]);
+            }
+
+            // 將找到的數字標記為 NumberMatch
+            foundNumbers.forEach(num => {
+                keys.push(`NumberMatch:${num}`);
             });
-            return keys; // 返回找到的所有 Key
+
+            return keys;
         };
 
-        // 交易配對邏輯優化
-        // 1. 遍歷 Log
-        // 2. 遇到 Request，找出它的 Key，存入 pendingMap (可能會有多個 Key 指向同一個 Request)
-        // 3. 遇到 Response，找出它的 Key，去 pendingMap 找是否有對應的 Request
-
-        // 為了避免複雜的多對多，這裡採用「第一個匹配到的 Key」作為主要關聯
-        // 或者建立一個反向索引
-
-        const requestLookup = new Map<string, LogEntry>(); // KeyString -> RequestLog
-
+        // 第一階段：建立 Request 索引
         parsedLogs.forEach(log => {
             const lowerMsg = log.message.toLowerCase();
-            // 寬鬆認定：有 "request" 且有 "{" 視為請求
-            // 有 "response" 視為回應
             const isRequest = (lowerMsg.includes('request') && log.message.includes('{')) || log.message.includes('InputChainData');
-            const isResponse = (lowerMsg.includes('response') && (log.message.includes('{') || log.message.includes('OutputChainData')));
-
-            const keys = extractKeys(log.message);
-            if (keys.length === 0) return; // 沒 Key 就不處理配對
 
             if (isRequest) {
-                // 將此 Request 註冊到它擁有的每一個 Key 上
-                // 如果同一個 Key 已經有舊的 Request，這裡會覆蓋 (假設是新的交易開始)
-                // 為了更精準，其實應該要看時間，但在單執行緒日誌中，覆蓋通常是合理的（舊的沒回應就是 Timeout 或 Log 遺失）
-                keys.forEach(k => requestLookup.set(k, log));
-            }
-            else if (isResponse) {
-                // 在 Response 中找 Key，看能不能對應到某個 Request
-                let matchedRequest: LogEntry | undefined;
-                let matchedKey = '';
+                const keys = extractKeys(log.message);
+                const time = new Date(log.timestamp).getTime();
 
+                if (keys.length > 0) {
+                    // 註冊到 Key lookup map
+                    keys.forEach(k => requestLookup.set(k, log));
+                    // 同時記錄時間序列（用於備用配對）
+                    requestsByTime.push({ log, keys, time });
+                }
+            }
+        });
+
+        // 第二階段：配對 Response
+        parsedLogs.forEach(log => {
+            const lowerMsg = log.message.toLowerCase();
+            const isResponse = lowerMsg.includes('response') && (log.message.includes('{') || log.message.includes('OutputChainData'));
+
+            if (!isResponse) return;
+
+            const keys = extractKeys(log.message);
+            const responseTime = new Date(log.timestamp).getTime();
+            let matchedRequest: LogEntry | undefined;
+            let matchedKey = '';
+            let matchMethod = '';
+
+            // 策略 1: 精確 Key 匹配（優先）
+            if (keys.length > 0) {
                 for (const k of keys) {
                     if (requestLookup.has(k)) {
                         matchedRequest = requestLookup.get(k);
                         matchedKey = k;
-                        break; // 找到一個配對就停止
+                        matchMethod = 'Key';
+                        break;
+                    }
+                }
+            }
+
+            // 策略 2: 時間序列配對（當找不到 Key 匹配時）
+            if (!matchedRequest && requestsByTime.length > 0) {
+                // 找到時間在 Response 之前且最接近的未配對 Request
+                let closestRequest: { log: LogEntry, keys: string[], time: number } | undefined;
+                let minTimeDiff = Infinity;
+
+                for (const req of requestsByTime) {
+                    const timeDiff = responseTime - req.time;
+
+                    // 只考慮時間在 Response 之前且在合理範圍內的 Request（10 秒內）
+                    if (timeDiff > 0 && timeDiff < 10000 && timeDiff < minTimeDiff) {
+                        // 檢查這個 Request 是否已經被配對過
+                        const alreadyMatched = groups.some(g => g.requestLog === req.log);
+                        if (!alreadyMatched) {
+                            closestRequest = req;
+                            minTimeDiff = timeDiff;
+                        }
                     }
                 }
 
-                if (matchedRequest) {
-                    // 找到配對，建立交易
-                    // 計算時間差 (毫秒)
-                    const reqTime = new Date(matchedRequest.timestamp).getTime();
-                    const resTime = new Date(log.timestamp).getTime();
-                    const duration = resTime - reqTime;
+                if (closestRequest) {
+                    matchedRequest = closestRequest.log;
+                    matchedKey = closestRequest.keys[0] || 'Time';
+                    matchMethod = 'Time';
+                }
+            }
 
-                    // 避免重複添加 (例如 Response 有多個 Key 都對應到同一個 Request，我們只加一次)
-                    // 這裡簡化處理：直接 Push
+            // 建立交易記錄
+            if (matchedRequest) {
+                const reqTime = new Date(matchedRequest.timestamp).getTime();
+                const duration = responseTime - reqTime;
 
-                    // 檢查是否已經存在這個 Request 的交易紀錄 (防止重複)
-                    // 但因為我們是遍歷，Response 是新的，所以應該還好。
-                    // 唯一問題是：如果一個 Request 對應多個 Response (分段回應?) -> 這裡會變成多筆交易
+                // 判斷交易狀態：檢查 Status 是否為 Success
+                let transactionStatus: 'success' | 'error' = 'success';
+                if (log.level === 'ERROR') {
+                    transactionStatus = 'error';
+                } else if (log.message.includes('"Status"')) {
+                    // 提取 Status 的值
+                    const statusMatch = log.message.match(/"Status"\s*:\s*"([^"]+)"/);
+                    if (statusMatch && statusMatch[1] !== 'Success') {
+                        transactionStatus = 'error'; // Failure, Error, 或其他非 Success 值都視為錯誤
+                    }
+                } else if (log.message.includes('"ReturnCode": "API') && !log.message.includes('"ReturnCode": "API0001"')) {
+                    transactionStatus = 'error';
+                }
 
-                    groups.push({
-                        id: `${matchedKey}-${resTime}`, // 唯一 ID
-                        requestLog: matchedRequest,
-                        responseLog: log,
-                        duration: isNaN(duration) ? 0 : duration,
-                        status: (log.level === 'ERROR' || log.message.includes('"Status":"Error"') || log.message.includes('"ReturnCode": "API')) ? (log.message.includes('"ReturnCode": "API0001"') ? 'success' : 'error') : 'success',
-                        keyInfo: matchedKey, // 顯示是用哪個 Key 配對成功的
-                        timestamp: matchedRequest.timestamp
-                    });
+                groups.push({
+                    id: `${matchedKey}-${responseTime}`,
+                    requestLog: matchedRequest,
+                    responseLog: log,
+                    duration: isNaN(duration) ? 0 : duration,
+                    status: transactionStatus,
+                    keyInfo: matchMethod === 'Key' ? matchedKey : `${matchedKey} [時間配對]`,
+                    timestamp: matchedRequest.timestamp
+                });
 
-                    // 配對成功後，是否要移除 Request？
-                    // 如果是 1 Req -> 1 Res 模型，應該移除。
-                    // 如果是 1 Req -> N Res，則不移除。
-                    // 為了避免後續錯誤配對 (例如下一個同 Key 的 Request 進來前，又來一個 Response)，通常移除比較安全
-
-                    // 這裡選擇移除該 Key 的對應，但也移除該 Request 對應的其他 Key? 
-                    // 複雜度有點高，先只移除當前 Key
+                // 從 lookup 中移除（避免重複配對）
+                if (matchMethod === 'Key') {
                     requestLookup.delete(matchedKey);
                 }
             }
         });
 
-        // 排序：最新的在上面 (或依據時間)
+        // 排序：最新的在上面
         groups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setTransactions(groups);
     };
@@ -274,17 +315,30 @@ const LogAnalyzer: React.FC = () => {
     const clearAll = () => {
         setLogInput('');
         setParsedLogs([]);
+        setTransactions([]);
+        setExpandedLogs(new Set());
         setSearchTerm('');
         setFilter('all');
+        setSelectedTag('all');
+        setViewMode('raw');
         setUploadProgress(0);
         setIsUploading(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     const filteredLogs = parsedLogs.filter(log => {
-        const matchesLevel = filter === 'all' || log.level.toLowerCase() === filter;
         const searchUpper = searchTerm.toLowerCase();
         const matchesSearch = !searchTerm || log.message.toLowerCase().includes(searchUpper);
+
+        const statusMatch = log.message.match(/"Status"\s*:\s*"([^"]+)"/);
+        const isSuccess = (statusMatch && statusMatch[1] === 'Success') || log.message.includes('"ReturnCode": "API0001"');
+        const isError = log.level === 'ERROR'
+            || (statusMatch && statusMatch[1] !== 'Success')
+            || (log.message.includes('"ReturnCode": "API') && !log.message.includes('"ReturnCode": "API0001"'));
+
+        const matchesLevel = filter === 'all'
+            || (filter === 'success' && isSuccess)
+            || (filter === 'error' && isError);
 
         // 標籤篩選：如果 selectedTag 是 "all"，則視為符合。
         const matchesTag = selectedTag === 'all' || (log.tags ?? []).includes(selectedTag);
@@ -319,12 +373,13 @@ const LogAnalyzer: React.FC = () => {
     }, [filter, searchTerm, selectedTag, parsedLogs.length]);
 
     const filteredTransactions = transactions.filter(tx => {
-        if (!searchTerm) return true;
+        const matchesStatus = filter === 'all' || tx.status === filter;
+        if (!searchTerm) return matchesStatus;
         const searchUpper = searchTerm.toLowerCase();
         const inReq = tx.requestLog.message.toLowerCase().includes(searchUpper);
         const inRes = tx.responseLog?.message.toLowerCase().includes(searchUpper);
         const inKey = tx.keyInfo.toLowerCase().includes(searchUpper);
-        return inReq || inRes || inKey;
+        return matchesStatus && (inReq || inRes || inKey);
     });
 
     const currentListLength = viewMode === 'raw' ? filteredLogs.length : filteredTransactions.length;
@@ -334,7 +389,35 @@ const LogAnalyzer: React.FC = () => {
     const paginatedLogs = filteredLogs.slice(startIndex, startIndex + pageSize);
     const paginatedTransactions = filteredTransactions.slice(startIndex, startIndex + pageSize);
 
+    const themeClasses = {
+        bg: theme === 'dark' ? 'bg-slate-900/50' : 'bg-white',
+        bgAlt: theme === 'dark' ? 'bg-slate-800/50' : 'bg-gray-50',
+        bgHover: theme === 'dark' ? 'hover:bg-slate-800/40' : 'hover:bg-gray-100',
+        text: theme === 'dark' ? 'text-slate-200' : 'text-gray-900',
+        textSecondary: theme === 'dark' ? 'text-slate-400' : 'text-gray-600',
+        textMuted: theme === 'dark' ? 'text-slate-500' : 'text-gray-500',
+        border: theme === 'dark' ? 'border-slate-700/50' : 'border-gray-300',
+        borderAlt: theme === 'dark' ? 'border-slate-700' : 'border-gray-300',
+        input: theme === 'dark' ? 'bg-slate-700/50 text-slate-200 border-slate-600' : 'bg-white text-gray-900 border-gray-300',
+        card: theme === 'dark' ? 'bg-slate-900 text-cyan-300' : 'bg-white text-gray-900',
+        cardBorder: theme === 'dark' ? 'border-slate-800' : 'border-gray-200',
+        gradient: theme === 'dark' ? 'from-slate-800 to-slate-900' : 'from-gray-100 to-gray-200',
+        shadow: theme === 'dark' ? 'pro-shadow' : 'shadow-lg'
+    };
+
     const getLogLevelColor = (level: string) => {
+        if (theme === 'light') {
+            switch (level.toUpperCase()) {
+                case 'ERROR':
+                    return 'text-red-700 bg-red-50 border-red-300';
+                case 'WARN':
+                    return 'text-yellow-700 bg-yellow-50 border-yellow-300';
+                case 'INFO':
+                    return 'text-blue-700 bg-blue-50 border-blue-300';
+                default:
+                    return 'text-gray-700 bg-gray-50 border-gray-300';
+            }
+        }
         switch (level.toUpperCase()) {
             case 'ERROR':
                 return 'text-red-400 bg-red-900/20 border-red-500/30';
@@ -349,9 +432,8 @@ const LogAnalyzer: React.FC = () => {
 
     const stats = {
         total: parsedLogs.length,
-        errors: parsedLogs.filter(l => l.level === 'ERROR').length,
-        warnings: parsedLogs.filter(l => l.level === 'WARN').length,
-        info: parsedLogs.filter(l => l.level === 'INFO').length
+        errors: transactions.filter(tx => tx.status === 'error').length,
+        success: transactions.filter(tx => tx.status === 'success').length
     };
 
     return (
@@ -374,10 +456,10 @@ const LogAnalyzer: React.FC = () => {
                 <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading}
-                    className="group relative overflow-hidden bg-gradient-to-br from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 text-white font-semibold py-2 px-3 rounded-lg border border-slate-700 transition-all duration-300 pro-shadow hover:pro-shadow-lg text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    className={`group relative overflow-hidden bg-gradient-to-br ${theme === 'dark' ? 'from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 text-white border-slate-700' : 'from-gray-200 to-gray-300 hover:from-gray-300 hover:to-gray-400 text-gray-900 border-gray-300'} font-semibold py-2 px-3 rounded-lg border transition-all duration-300 pro-shadow hover:pro-shadow-lg text-xs disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                     <div className="relative z-10 flex items-center justify-center gap-1.5">
-                        <svg className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-300 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className={`w-3.5 h-3.5 ${theme === 'dark' ? 'text-slate-400 group-hover:text-slate-300' : 'text-gray-600 group-hover:text-gray-800'} transition-colors`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
                         <span>{isUploading ? '上傳中...' : '上傳日誌檔案'}</span>
@@ -419,22 +501,18 @@ const LogAnalyzer: React.FC = () => {
 
             {/* 統計資訊卡片 */}
             {parsedLogs.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-                    <div className="bg-slate-800/50 backdrop-blur-sm p-2 rounded-lg border border-slate-700/50 pro-shadow">
-                        <div className="text-slate-400 text-[10px] font-semibold mb-0.5">總日誌數</div>
-                        <div className="text-lg font-bold text-white">{stats.total}</div>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div className={`${theme === 'dark' ? 'bg-red-900/20' : 'bg-red-50'} backdrop-blur-sm p-2 rounded-lg border ${theme === 'dark' ? 'border-red-500/30' : 'border-red-300'} ${themeClasses.shadow}`}>
+                        <div className={`${theme === 'dark' ? 'text-red-400' : 'text-red-700'} text-[10px] font-semibold mb-0.5`}>錯誤</div>
+                        <div className={`text-lg font-bold ${theme === 'dark' ? 'text-red-400' : 'text-red-700'}`}>{stats.errors}</div>
                     </div>
-                    <div className="bg-red-900/20 backdrop-blur-sm p-2 rounded-lg border border-red-500/30 pro-shadow">
-                        <div className="text-red-400 text-[10px] font-semibold mb-0.5">錯誤</div>
-                        <div className="text-lg font-bold text-red-400">{stats.errors}</div>
+                    <div className={`${theme === 'dark' ? 'bg-green-900/20' : 'bg-green-50'} backdrop-blur-sm p-2 rounded-lg border ${theme === 'dark' ? 'border-green-500/30' : 'border-green-300'} ${themeClasses.shadow}`}>
+                        <div className={`${theme === 'dark' ? 'text-green-400' : 'text-green-700'} text-[10px] font-semibold mb-0.5`}>成功</div>
+                        <div className={`text-lg font-bold ${theme === 'dark' ? 'text-green-400' : 'text-green-700'}`}>{stats.success}</div>
                     </div>
-                    <div className="bg-yellow-900/20 backdrop-blur-sm p-2 rounded-lg border border-yellow-500/30 pro-shadow">
-                        <div className="text-yellow-400 text-[10px] font-semibold mb-0.5">警告</div>
-                        <div className="text-lg font-bold text-yellow-400">{stats.warnings}</div>
-                    </div>
-                    <div className="bg-blue-900/20 backdrop-blur-sm p-2 rounded-lg border border-blue-500/30 pro-shadow">
-                        <div className="text-blue-400 text-[10px] font-semibold mb-0.5">資訊</div>
-                        <div className="text-lg font-bold text-blue-400">{stats.info}</div>
+                    <div className={`${themeClasses.bgAlt} backdrop-blur-sm p-2 rounded-lg border ${themeClasses.border} ${themeClasses.shadow}`}>
+                        <div className={`${themeClasses.textSecondary} text-[10px] font-semibold mb-0.5`}>總日誌數</div>
+                        <div className={`text-lg font-bold ${themeClasses.text}`}>{stats.total}</div>
                     </div>
                 </div>
             )}
@@ -442,42 +520,36 @@ const LogAnalyzer: React.FC = () => {
             {/* 主要內容區域 */}
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 flex-grow overflow-hidden">
                 {/* 日誌分析結果區 */}
-                <div className="flex flex-col h-[600px] lg:h-full bg-slate-900/50 rounded-2xl border border-slate-700/50 pro-shadow overflow-hidden lg:col-span-4">
-                    <div className="flex flex-col gap-2 px-6 py-4 bg-gradient-to-r from-slate-800 to-slate-900 border-b border-slate-700/50">
+                <div className={`flex flex-col h-[600px] lg:h-full ${themeClasses.bg} rounded-2xl border ${themeClasses.border} ${themeClasses.shadow} overflow-hidden lg:col-span-4`}>
+                    <div className={`flex flex-col gap-2 px-6 py-4 bg-gradient-to-r ${themeClasses.gradient} border-b ${themeClasses.border}`}>
                         <div className="flex items-center gap-3">
                             <div className="w-1 h-6 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-full"></div>
-                            <span className="text-sm font-bold text-slate-200 uppercase tracking-wider">分析結果</span>
+                            <span className={`text-sm font-bold ${themeClasses.text} uppercase tracking-wider`}>分析結果</span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 onClick={() => setFilter('all')}
-                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'all' ? 'bg-indigo-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600'}`}
+                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'all' ? 'bg-indigo-600 text-white' : `${theme === 'dark' ? 'bg-slate-700/50 text-slate-400 hover:bg-slate-600' : 'bg-gray-200 text-gray-800 hover:bg-gray-300'}`}`}
                             >
                                 全部
                             </button>
                             <button
                                 onClick={() => setFilter('error')}
-                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'error' ? 'bg-red-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600'}`}
+                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'error' ? 'bg-red-600 text-white' : `${theme === 'dark' ? 'bg-slate-700/50 text-slate-400 hover:bg-slate-600' : 'bg-gray-200 text-gray-800 hover:bg-gray-300'}`}`}
                             >
                                 錯誤
                             </button>
                             <button
-                                onClick={() => setFilter('warn')}
-                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'warn' ? 'bg-yellow-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600'}`}
+                                onClick={() => setFilter('success')}
+                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'success' ? 'bg-green-600 text-white' : `${theme === 'dark' ? 'bg-slate-700/50 text-slate-400 hover:bg-slate-600' : 'bg-gray-200 text-gray-800 hover:bg-gray-300'}`}`}
                             >
-                                警告
-                            </button>
-                            <button
-                                onClick={() => setFilter('info')}
-                                className={`px-3 py-1 text-xs rounded-lg transition-all ${filter === 'info' ? 'bg-blue-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600'}`}
-                            >
-                                資訊
+                                成功
                             </button>
                         </div>
 
                         <div className="w-full">
                             <div className="relative group w-full">
-                                <div className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500 pointer-events-none">
+                                <div className={`absolute inset-y-0 left-0 flex items-center pl-3 ${themeClasses.textMuted} pointer-events-none`}>
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                     </svg>
@@ -487,7 +559,7 @@ const LogAnalyzer: React.FC = () => {
                                     placeholder="搜尋內容 (與標籤為 OR 關係)..."
                                     value={searchTerm}
                                     onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="w-full pl-10 pr-4 py-2 text-sm bg-slate-700/50 text-slate-200 border border-slate-600 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
+                                    className={`w-full pl-10 pr-4 py-2 text-sm ${themeClasses.input} rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-all`}
                                 />
                             </div>
                         </div>
@@ -495,7 +567,7 @@ const LogAnalyzer: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 onClick={() => setSelectedTag('all')}
-                                className={`px-3 py-1 text-xs rounded-lg transition-all ${selectedTag === 'all' ? 'bg-slate-200 text-slate-900' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-600'}`}
+                                className={`px-3 py-1 text-xs rounded-lg transition-all ${selectedTag === 'all' ? `${theme === 'dark' ? 'bg-slate-200 text-slate-900' : 'bg-indigo-100 text-gray-900'}` : `${theme === 'dark' ? 'bg-slate-700/50 text-slate-300 hover:bg-slate-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}`}
                             >
                                 全部標籤
                             </button>
@@ -503,7 +575,7 @@ const LogAnalyzer: React.FC = () => {
                                 <button
                                     key={tag}
                                     onClick={() => setSelectedTag(tag)}
-                                    className={`px-3 py-1 text-xs rounded-lg transition-all ${selectedTag === tag ? 'bg-indigo-500 text-white' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-600'}`}
+                                    className={`px-3 py-1 text-xs rounded-lg transition-all ${selectedTag === tag ? 'bg-indigo-500 text-white' : `${theme === 'dark' ? 'bg-slate-700/50 text-slate-300 hover:bg-slate-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}`}
                                     title={tag}
                                 >
                                     {tag}
@@ -512,26 +584,26 @@ const LogAnalyzer: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex items-center justify-between px-6 py-3 border-b border-slate-700/50 bg-slate-900/40">
+                    <div className={`flex items-center justify-between px-6 py-3 border-b ${themeClasses.border} ${themeClasses.bgAlt}`}>
                         <div className="flex items-center gap-4">
-                            <div className="text-xs text-slate-400">
-                                顯示第 <span className="text-slate-200 font-semibold">{currentListLength === 0 ? 0 : startIndex + 1}</span>
+                            <div className={`text-xs ${themeClasses.textSecondary}`}>
+                                顯示第 <span className={`${themeClasses.text} font-semibold`}>{currentListLength === 0 ? 0 : startIndex + 1}</span>
                                 {' '}–{' '}
-                                <span className="text-slate-200 font-semibold">{Math.min(startIndex + pageSize, currentListLength)}</span>
+                                <span className={`${themeClasses.text} font-semibold`}>{Math.min(startIndex + pageSize, currentListLength)}</span>
                                 {' '}筆 / 共{' '}
-                                <span className="text-slate-200 font-semibold">{currentListLength}</span> 筆
+                                <span className={`${themeClasses.text} font-semibold`}>{currentListLength}</span> 筆
                             </div>
 
-                            <div className="flex bg-slate-800/50 rounded-lg p-0.5 border border-slate-700/50">
+                            <div className={`flex ${themeClasses.bgAlt} rounded-lg p-0.5 border ${themeClasses.border}`}>
                                 <button
                                     onClick={() => setViewMode('raw')}
-                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'raw' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'raw' ? 'bg-indigo-600 text-white shadow-sm' : `${themeClasses.textSecondary} ${theme === 'dark' ? 'hover:text-slate-200' : 'hover:text-gray-900'}`}`}
                                 >
                                     原始列表
                                 </button>
                                 <button
                                     onClick={() => setViewMode('transaction')}
-                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'transaction' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'transaction' ? 'bg-indigo-600 text-white shadow-sm' : `${themeClasses.textSecondary} ${theme === 'dark' ? 'hover:text-slate-200' : 'hover:text-gray-900'}`}`}
                                 >
                                     交易檢視 (Beta)
                                 </button>
@@ -542,15 +614,15 @@ const LogAnalyzer: React.FC = () => {
                             <button
                                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                                 disabled={safePage === 1}
-                                className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-700/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className={`px-2 py-1 text-xs rounded-md border ${themeClasses.borderAlt} ${themeClasses.text} ${themeClasses.bgHover} disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                                 上一頁
                             </button>
-                            <span className="text-xs text-slate-400">{safePage} / {totalPages}</span>
+                            <span className={`text-xs ${themeClasses.textSecondary}`}>{safePage} / {totalPages}</span>
                             <button
                                 onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                                 disabled={safePage === totalPages}
-                                className="px-2 py-1 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-700/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className={`px-2 py-1 text-xs rounded-md border ${themeClasses.borderAlt} ${themeClasses.text} ${themeClasses.bgHover} disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                                 下一頁
                             </button>
@@ -561,7 +633,7 @@ const LogAnalyzer: React.FC = () => {
                         {/* Raw Mode 渲染邏輯 */}
                         {viewMode === 'raw' && (
                             parsedLogs.length === 0 ? (
-                                <div className="h-full flex items-center justify-center text-slate-500">
+                                <div className={`h-full flex items-center justify-center ${themeClasses.textMuted}`}>
                                     <div className="text-center">
                                         <svg className="w-16 h-16 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -586,32 +658,34 @@ const LogAnalyzer: React.FC = () => {
                                                 <div className="flex flex-col gap-1 min-w-[60px]">
                                                     <span className="font-bold">{log.level}</span>
                                                     {hasJSON && (
-                                                        <span className="text-[10px] text-slate-500 bg-slate-900/50 px-1 rounded border border-slate-700 w-fit">
+                                                        <span className={`text-[10px] px-1 rounded border w-fit ${theme === 'dark' ? 'text-slate-500 bg-slate-900/50 border-slate-700' : 'text-gray-600 bg-white/70 border-gray-300'}`}>
                                                             {isExpanded ? '收合' : '展開 JSON'}
                                                         </span>
                                                     )}
                                                 </div>
-                                                <span className="text-slate-400 min-w-[140px]">{log.timestamp.replace('T', ' ').split('.')[0]}</span>
+                                                <span className={`min-w-[140px] ${theme === 'dark' ? 'text-slate-400' : 'text-gray-600'}`}>
+                                                    {log.timestamp.replace('T', ' ').split('.')[0]}
+                                                </span>
                                                 <div className="flex-1 overflow-hidden">
-                                                    <div className={`text-slate-200 break-all ${!isExpanded && hasJSON ? 'line-clamp-2' : ''}`}>
+                                                    <div className={`${theme === 'dark' ? 'text-slate-200' : 'text-gray-900'} break-all ${!isExpanded && hasJSON ? 'line-clamp-2' : ''}`}>
                                                         {log.message}
                                                     </div>
                                                     {isExpanded && hasJSON && (
                                                         <div className="mt-3 relative group">
-                                                            <div className="absolute -inset-2 bg-slate-900/50 rounded-lg -z-10"></div>
+                                                            <div className={`absolute -inset-2 rounded-lg -z-10 ${theme === 'dark' ? 'bg-slate-900/50' : 'bg-gray-100'}`}></div>
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
                                                                     navigator.clipboard.writeText(formattedJSON);
                                                                 }}
-                                                                className="absolute top-2 right-2 z-10 p-1.5 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 rounded-md transition-colors border border-slate-700/50 backdrop-blur-sm opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                                                className={`absolute top-2 right-2 z-10 p-1.5 rounded-md transition-colors border backdrop-blur-sm opacity-0 group-hover:opacity-100 focus:opacity-100 ${theme === 'dark' ? 'text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 border-slate-700/50' : 'text-gray-600 hover:text-gray-900 bg-white/80 hover:bg-white border-gray-300'}`}
                                                                 title="複製 JSON 內容"
                                                             >
                                                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                                                                 </svg>
                                                             </button>
-                                                            <pre className="p-3 rounded bg-slate-950 border border-slate-800 text-green-400 overflow-x-auto text-[11px] leading-relaxed shadow-inner font-mono">
+                                                            <pre className={`p-3 rounded border overflow-x-auto text-[11px] leading-relaxed shadow-inner font-mono ${theme === 'dark' ? 'bg-slate-950 border-slate-800 text-green-400' : 'bg-white border-gray-200 text-emerald-700'}`}>
                                                                 {formattedJSON}
                                                             </pre>
                                                         </div>
@@ -627,12 +701,12 @@ const LogAnalyzer: React.FC = () => {
                         {/* Transaction Mode (新功能) */}
                         {viewMode === 'transaction' && (
                             filteredTransactions.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center p-12 text-slate-500 border border-dashed border-slate-700 rounded-lg">
-                                    <svg className="w-12 h-12 mb-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <div className={`flex flex-col items-center justify-center p-12 rounded-lg border border-dashed ${theme === 'dark' ? 'text-slate-500 border-slate-700' : 'text-gray-600 border-gray-300'}`}>
+                                    <svg className={`w-12 h-12 mb-3 ${theme === 'dark' ? 'text-slate-600' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                                     </svg>
                                     <p>{searchTerm ? '找不到符合搜尋條件的交易' : '找不到可配對的 Request/Response 交易'}</p>
-                                    <span className="text-xs mt-1 text-slate-600">目前支援依據 ShopId, TSCode, OrderCode 等欄位自動配對</span>
+                                    <span className={`text-xs mt-1 ${theme === 'dark' ? 'text-slate-600' : 'text-gray-500'}`}>目前支援依據 ShopId, TSCode, OrderCode 等欄位自動配對</span>
                                 </div>
                             ) : (
                                 paginatedTransactions.map(tx => {
@@ -641,49 +715,79 @@ const LogAnalyzer: React.FC = () => {
                                     const resJSON = tx.responseLog ? tryFormatJSON(tx.responseLog.message) : null;
 
                                     return (
-                                        <div key={tx.id} className="border border-slate-700/50 rounded-lg bg-slate-800/20 overflow-hidden mb-2">
+                                        <div key={tx.id} className={`rounded-lg overflow-hidden mb-2 border ${theme === 'dark' ? 'border-slate-700/50 bg-slate-800/20' : 'border-gray-300 bg-white'}`}>
                                             <div
-                                                className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-800/40 transition-colors"
+                                                className={`flex items-center justify-between p-3 cursor-pointer transition-colors ${theme === 'dark' ? 'hover:bg-slate-800/40' : 'hover:bg-gray-100'}`}
                                                 onClick={() => toggleExpand(tx.id)}
                                             >
                                                 <div className="flex items-center gap-4">
                                                     <div className={`w-2 h-2 rounded-full ${tx.status === 'success' ? 'bg-green-500' : tx.status === 'pending' ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
-                                                    <span className="text-xs font-mono text-slate-400">{tx.timestamp.replace('T', ' ').split('.')[0]}</span>
-                                                    <span className="text-xs font-bold text-slate-200 bg-slate-700/50 px-2 py-0.5 rounded border border-slate-600/50">
-                                                        {tx.keyInfo.split(':')[0]} <span className="text-slate-400 font-normal">{tx.keyInfo.split(':')[1]}</span>
+                                                    <span className={`text-xs font-mono ${theme === 'dark' ? 'text-slate-400' : 'text-gray-600'}`}>
+                                                        {tx.timestamp.replace('T', ' ').split('.')[0]}
+                                                    </span>
+                                                    <span className={`text-xs font-bold px-2 py-0.5 rounded border ${theme === 'dark' ? 'text-slate-200 bg-slate-700/50 border-slate-600/50' : 'text-gray-900 bg-gray-100 border-gray-300'}`}>
+                                                        {tx.keyInfo.split(':')[0]} <span className={`${theme === 'dark' ? 'text-slate-400' : 'text-gray-600'} font-normal`}>{tx.keyInfo.split(':')[1]}</span>
                                                     </span>
                                                 </div>
-                                                <div className="flex items-center gap-4 text-xs">
+                                                <div className={`flex items-center gap-4 text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-gray-500'}`}>
                                                     {tx.duration !== undefined && (
-                                                        <span className={`font-mono ${tx.duration > 1000 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                                        <span className={`font-mono ${tx.duration > 1000 ? (theme === 'dark' ? 'text-yellow-400' : 'text-yellow-700') : (theme === 'dark' ? 'text-green-400' : 'text-green-700')}`}>
                                                             {tx.duration}ms
                                                         </span>
                                                     )}
-                                                    <span className="text-slate-500">
+                                                    <span>
                                                         {isExpanded ? '收合詳情' : '查看詳情'}
                                                     </span>
                                                 </div>
                                             </div>
 
                                             {isExpanded && (
-                                                <div className="p-3 border-t border-slate-700/50 bg-slate-900/30 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div className={`p-3 border-t grid grid-cols-1 md:grid-cols-2 gap-4 ${theme === 'dark' ? 'border-slate-700/50 bg-slate-900/30' : 'border-gray-200 bg-gray-50'}`}>
                                                     {/* Request Section */}
                                                     <div className="space-y-2">
-                                                        <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-1">Request</div>
-                                                        <pre className="text-[10px] text-slate-300 font-mono bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">
-                                                            {reqJSON || tx.requestLog.message}
-                                                        </pre>
+                                                        <div className={`text-[10px] uppercase font-bold tracking-wider mb-1 ${theme === 'dark' ? 'text-slate-500' : 'text-gray-600'}`}>Request</div>
+                                                        <div className="relative group">
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    navigator.clipboard.writeText(reqJSON || tx.requestLog.message);
+                                                                }}
+                                                                className={`absolute top-2 right-2 z-10 p-1.5 rounded-md transition-colors border backdrop-blur-sm opacity-0 group-hover:opacity-100 focus:opacity-100 ${theme === 'dark' ? 'text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 border-slate-700/50' : 'text-gray-600 hover:text-gray-900 bg-white/80 hover:bg-white border-gray-300'}`}
+                                                                title="複製 Request 內容"
+                                                            >
+                                                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                                                </svg>
+                                                            </button>
+                                                            <pre className={`text-[10px] font-mono p-2 rounded border overflow-x-auto ${theme === 'dark' ? 'text-slate-300 bg-slate-950 border-slate-800' : 'text-gray-800 bg-white border-gray-200'}`}>
+                                                                {reqJSON || tx.requestLog.message}
+                                                            </pre>
+                                                        </div>
                                                     </div>
 
                                                     {/* Response Section */}
                                                     <div className="space-y-2">
-                                                        <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-1">Response</div>
+                                                        <div className={`text-[10px] uppercase font-bold tracking-wider mb-1 ${theme === 'dark' ? 'text-slate-500' : 'text-gray-600'}`}>Response</div>
                                                         {tx.responseLog ? (
-                                                            <pre className={`text-[10px] font-mono bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto ${tx.status === 'error' ? 'text-red-300 border-red-900/30' : 'text-green-300'}`}>
-                                                                {resJSON || tx.responseLog.message}
-                                                            </pre>
+                                                            <div className="relative group">
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        navigator.clipboard.writeText(resJSON || tx.responseLog.message);
+                                                                    }}
+                                                                    className={`absolute top-2 right-2 z-10 p-1.5 rounded-md transition-colors border backdrop-blur-sm opacity-0 group-hover:opacity-100 focus:opacity-100 ${theme === 'dark' ? 'text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 border-slate-700/50' : 'text-gray-600 hover:text-gray-900 bg-white/80 hover:bg-white border-gray-300'}`}
+                                                                    title="複製 Response 內容"
+                                                                >
+                                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                                                    </svg>
+                                                                </button>
+                                                                <pre className={`text-[10px] font-mono p-2 rounded border overflow-x-auto ${tx.status === 'error' ? (theme === 'dark' ? 'text-red-300 border-red-900/30 bg-slate-950' : 'text-red-700 border-red-300 bg-white') : (theme === 'dark' ? 'text-green-300 bg-slate-950 border-slate-800' : 'text-green-700 bg-white border-gray-200')}`}>
+                                                                    {resJSON || tx.responseLog.message}
+                                                                </pre>
+                                                            </div>
                                                         ) : (
-                                                            <div className="text-xs text-slate-500 italic p-2">等待回應中...</div>
+                                                            <div className={`text-xs italic p-2 ${theme === 'dark' ? 'text-slate-500' : 'text-gray-600'}`}>等待回應中...</div>
                                                         )}
                                                     </div>
                                                 </div>
@@ -697,15 +801,16 @@ const LogAnalyzer: React.FC = () => {
                 </div>
 
                 {/* 日誌輸入區 */}
-                <div className="flex flex-col h-[600px] lg:h-full bg-slate-900/50 rounded-2xl border border-slate-700/50 pro-shadow overflow-hidden lg:col-span-1">
+                <div className={`flex flex-col h-[600px] lg:h-full ${themeClasses.bg} rounded-2xl border ${themeClasses.border} ${themeClasses.shadow} overflow-hidden lg:col-span-1`}>
                     <EditorHeader
                         title="日誌輸入"
                         secondaryLabel="清除"
                         secondaryAction={() => setLogInput('')}
+                        theme={theme}
                     />
                     <div className="relative flex-grow overflow-hidden">
                         <textarea
-                            className="w-full h-full bg-slate-900 text-cyan-300 p-6 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/50 leading-relaxed"
+                            className={`w-full h-full ${themeClasses.card} p-6 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/50 leading-relaxed`}
                             placeholder="📋 在此貼上您的日誌內容或上傳日誌檔案..."
                             value={logInput}
                             onChange={(e) => setLogInput(e.target.value)}
