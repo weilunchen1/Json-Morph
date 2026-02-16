@@ -220,6 +220,25 @@ const LogAnalyzer: React.FC<LogAnalyzerProps> = ({ theme }) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
+        // 檔案大小限制：50MB（日誌檔案可能較大）
+        const MAX_FILE_SIZE = 50 * 1024 * 1024;
+        if (file.size > MAX_FILE_SIZE) {
+            alert("檔案大小超過限制（最大 50MB）");
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
+        // 檔案類型驗證
+        const allowedTypes = ['text/plain', 'application/octet-stream', ''];
+        const allowedExtensions = ['.log', '.txt'];
+        const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+
+        if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExtension)) {
+            alert("僅支援 .log 和 .txt 檔案格式");
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
         setIsUploading(true);
         setUploadProgress(0);
 
@@ -244,6 +263,7 @@ const LogAnalyzer: React.FC<LogAnalyzerProps> = ({ theme }) => {
         reader.onerror = () => {
             setIsUploading(false);
             setUploadProgress(0);
+            alert("檔案讀取失敗");
         };
 
         reader.readAsText(file);

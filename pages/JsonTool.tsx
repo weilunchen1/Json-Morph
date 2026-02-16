@@ -37,6 +37,22 @@ const JsonTool: React.FC<JsonToolProps> = ({ theme }) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
+        // 檔案大小限制：10MB
+        const MAX_FILE_SIZE = 10 * 1024 * 1024;
+        if (file.size > MAX_FILE_SIZE) {
+            setState(prev => ({ ...prev, error: "檔案大小超過限制（最大 10MB）" }));
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
+        // 檔案類型驗證
+        const allowedTypes = ['application/json', 'text/plain', ''];
+        if (!allowedTypes.includes(file.type) && !file.name.endsWith('.json')) {
+            setState(prev => ({ ...prev, error: "僅支援 JSON 檔案格式" }));
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = (event) => {
             const content = event.target?.result as string;
@@ -46,6 +62,9 @@ const JsonTool: React.FC<JsonToolProps> = ({ theme }) => {
                 fileName: file.name,
                 error: null
             }));
+        };
+        reader.onerror = () => {
+            setState(prev => ({ ...prev, error: "檔案讀取失敗" }));
         };
         reader.readAsText(file);
     };

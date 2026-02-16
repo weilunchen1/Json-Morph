@@ -36,8 +36,6 @@ jobs:
         
       - name: 建置專案
         run: npm run build
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           
       - name: 設置 Pages
         uses: actions/configure-pages@v4
