@@ -108,6 +108,30 @@ const Navigation: React.FC<NavigationProps> = ({ theme, setTheme }) => {
                         </>
                     )}
                 </NavLink>
+
+                <NavLink
+                    to="/textCompare"
+                    className={({ isActive }) =>
+                        `group relative px-3 py-1.5 rounded-lg font-semibold text-xs transition-all duration-300 ${isActive
+                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white pro-shadow-lg'
+                            : `${isDark ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`
+                        }`
+                    }
+                >
+                    {({ isActive }) => (
+                        <>
+                            <div className="flex items-center gap-1.5">
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                                </svg>
+                                <span>文字比對</span>
+                            </div>
+                            {isActive && (
+                                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-400 to-purple-400"></div>
+                            )}
+                        </>
+                    )}
+                </NavLink>
             </nav>
         </header>
     );
