@@ -4,6 +4,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navigation from './components/Navigation.tsx';
 import JsonTool from './pages/JsonTool.tsx';
 import LogAnalyzer from './pages/LogAnalyzer.tsx';
+import TextCompare from './pages/TextCompare.tsx';
 
 const App: React.FC = () => {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -30,6 +31,7 @@ const App: React.FC = () => {
           <Route path="/" element={<Navigate to="/jsonTool" replace />} />
           <Route path="/jsonTool" element={<JsonTool theme={theme} />} />
           <Route path="/logAnalyzer" element={<LogAnalyzer theme={theme} />} />
+          <Route path="/textCompare" element={<TextCompare theme={theme} />} />
         </Routes>
       </div>
     </HashRouter>
