@@ -132,6 +132,30 @@ const Navigation: React.FC<NavigationProps> = ({ theme, setTheme }) => {
                         </>
                     )}
                 </NavLink>
+
+                <NavLink
+                    to="/sqlSplitter"
+                    className={({ isActive }) =>
+                        `group relative px-3 py-1.5 rounded-lg font-semibold text-xs transition-all duration-300 ${isActive
+                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white pro-shadow-lg'
+                            : `${isDark ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`
+                        }`
+                    }
+                >
+                    {({ isActive }) => (
+                        <>
+                            <div className="flex items-center gap-1.5">
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16m-7 6h7" />
+                                </svg>
+                                <span>SQL 分割</span>
+                            </div>
+                            {isActive && (
+                                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-400 to-purple-400"></div>
+                            )}
+                        </>
+                    )}
+                </NavLink>
             </nav>
         </header>
     );
