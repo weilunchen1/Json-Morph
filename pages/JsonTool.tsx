@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { nullifyTransform, smartTransform, cleanJsonString } from '../services/transformer.ts';
 import EditorHeader from '../components/EditorHeader.tsx';
 import { JSONState } from '../types.ts';
@@ -14,8 +14,110 @@ const JsonTool: React.FC<JsonToolProps> = ({ theme }) => {
         error: null,
         fileName: null
     });
-
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const outputContainerRef = useRef<HTMLPreElement>(null);
+
+    // 搜尋相關狀態
+    const [searchQuery, setSearchQuery] = useState('');
+    const [useRegex, setUseRegex] = useState(false);
+    const [matches, setMatches] = useState<{start: number, end: number}[]>([]);
+    const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+
+    // 處理搜尋與 Regex 匹配
+    useEffect(() => {
+        if (!searchQuery || !state.output) {
+            setMatches([]);
+            setCurrentMatchIndex(-1);
+            return;
+        }
+
+        try {
+            const regexStr = useRegex 
+                ? searchQuery 
+                : searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            
+            // 使用 gi 確保全域且不分大小寫搜索
+            const regex = new RegExp(regexStr, 'gi');
+            
+            const text = state.output;
+            const newMatches: {start: number, end: number}[] = [];
+            let match;
+            
+            // 避免空字串導致的無限迴圈
+            if (regexStr.length === 0) {
+                return;
+            }
+
+            while ((match = regex.exec(text)) !== null) {
+                newMatches.push({ start: match.index, end: regex.lastIndex });
+                if (match.index === regex.lastIndex) {
+                    regex.lastIndex++;
+                }
+            }
+            
+            setMatches(newMatches);
+            setCurrentMatchIndex(newMatches.length > 0 ? 0 : -1);
+        } catch (e) {
+            // Regex 語法錯誤時默默忽略或清空結果
+            setMatches([]);
+            setCurrentMatchIndex(-1);
+        }
+    }, [searchQuery, useRegex, state.output]);
+
+    // 捲動到當前選中的標記
+    useEffect(() => {
+        if (currentMatchIndex >= 0 && outputContainerRef.current) {
+            const marks = outputContainerRef.current.querySelectorAll('mark');
+            const activeMark = marks[currentMatchIndex];
+            if (activeMark) {
+                activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    }, [currentMatchIndex]);
+
+    const handleNextMatch = () => {
+        if (matches.length > 0) {
+            setCurrentMatchIndex((prev) => (prev + 1) % matches.length);
+        }
+    };
+
+    const handlePrevMatch = () => {
+        if (matches.length > 0) {
+            setCurrentMatchIndex((prev) => (prev - 1 + matches.length) % matches.length);
+        }
+    };
+
+    // 渲染高亮的 JSON 結果
+    const renderHighlightedText = () => {
+        if (!state.output) return null;
+        if (matches.length === 0) return state.output;
+
+        const parts: React.ReactNode[] = [];
+        let lastIndex = 0;
+
+        matches.forEach((match, index) => {
+            if (match.start > lastIndex) {
+                parts.push(state.output.substring(lastIndex, match.start));
+            }
+            const isCurrent = index === currentMatchIndex;
+            parts.push(
+                <mark
+                    key={index}
+                    data-match-index={index}
+                    className={`${isCurrent ? 'bg-orange-500 text-white shadow-sm' : 'bg-yellow-300/80 text-yellow-900'} rounded-sm px-0.5 transition-colors`}
+                >
+                    {state.output.substring(match.start, match.end)}
+                </mark>
+            );
+            lastIndex = match.end;
+        });
+
+        if (lastIndex < state.output.length) {
+            parts.push(state.output.substring(lastIndex));
+        }
+
+        return parts;
+    };
     const isDark = theme === 'dark';
     const themeClasses = {
         panel: isDark ? 'bg-slate-900/50 border-slate-700/50 pro-shadow' : 'bg-white border-gray-200 shadow-lg',
@@ -256,13 +358,78 @@ const JsonTool: React.FC<JsonToolProps> = ({ theme }) => {
                                 </div>
                             </div>
                         ) : (
-                            <textarea
-                                className={`w-full h-full ${themeClasses.textareaOutput} p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed`}
-                                readOnly
-                                placeholder="✨ 轉換結果將顯示在此處..."
-                                value={state.output}
-                                spellCheck={false}
-                            />
+                            <div className="flex flex-col w-full h-full">
+                                {/* 搜尋區塊 */}
+                                {state.output && (
+                                    <div className={`flex items-center gap-3 p-3 border-b border-t ${isDark ? 'bg-slate-800/80 border-slate-700/50' : 'bg-gray-50 border-gray-200'} shrink-0`}>
+                                        <div className="relative flex-grow max-w-sm">
+                                            <input
+                                                type="text"
+                                                value={searchQuery}
+                                                onChange={(e) => setSearchQuery(e.target.value)}
+                                                placeholder={useRegex ? "輸入 Regular Expression..." : "搜尋文字..."}
+                                                className={`w-full pl-9 pr-3 py-1.5 text-sm rounded border ${isDark ? 'bg-slate-900 border-slate-600 focus:border-indigo-500 text-slate-200 placeholder-slate-500' : 'bg-white border-gray-300 focus:border-indigo-500'} focus:ring-1 focus:ring-indigo-500 outline-none`}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        e.shiftKey ? handlePrevMatch() : handleNextMatch();
+                                                    }
+                                                }}
+                                                spellCheck={false}
+                                            />
+                                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                                </svg>
+                                            </div>
+                                        </div>
+                                        
+                                        <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={useRegex} 
+                                                onChange={(e) => setUseRegex(e.target.checked)}
+                                                className="rounded border-gray-300 text-indigo-600 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                            />
+                                            <span className={isDark ? 'text-slate-300' : 'text-gray-600'}>Regex</span>
+                                        </label>
+
+                                        <div className="flex items-center gap-1 ml-auto">
+                                            <span className={`text-xs mr-2 whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
+                                                {searchQuery && matches.length > 0 ? `${currentMatchIndex + 1} / ${matches.length}` : (searchQuery ? '無結果' : '')}
+                                            </span>
+                                            <button 
+                                                onClick={handlePrevMatch}
+                                                disabled={matches.length === 0}
+                                                className={`p-1 rounded ${isDark ? 'hover:bg-slate-700 text-slate-300 disabled:opacity-30' : 'hover:bg-gray-200 text-gray-600 disabled:opacity-30'} transition-colors`}
+                                                title="上一個 (Shift+Enter)"
+                                            >
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                                                </svg>
+                                            </button>
+                                            <button 
+                                                onClick={handleNextMatch}
+                                                disabled={matches.length === 0}
+                                                className={`p-1 rounded ${isDark ? 'hover:bg-slate-700 text-slate-300 disabled:opacity-30' : 'hover:bg-gray-200 text-gray-600 disabled:opacity-30'} transition-colors`}
+                                                title="下一個 (Enter)"
+                                            >
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <pre
+                                    ref={outputContainerRef}
+                                    className={`w-full flex-grow ${themeClasses.textareaOutput} p-6 font-mono text-sm overflow-auto leading-relaxed whitespace-pre m-0 outline-none`}
+                                    style={{ tabSize: 2 }}
+                                >
+                                    {state.output ? renderHighlightedText() : <span className="opacity-50">✨ 轉換結果將顯示在此處...</span>}
+                                </pre>
+                            </div>
                         )}
                     </div>
                 </div>
